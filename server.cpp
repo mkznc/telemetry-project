@@ -3,6 +3,7 @@
 #include <netinet/in.h>
 #include <string>
 
+#include "network_utils.h"
 #define BUFFER_SIZE 1024
 
 int main() {
@@ -16,33 +17,48 @@ int main() {
 	
 	int bindVal = bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address));
 
-	if (bindVal)
-		perror("bind");
-	
+	if (bindVal == -1) perror("bind");
 	listen(fd, 5);
 	
 	int client_fd = accept(fd, nullptr, nullptr);
 	std::cout << "\tClient fd: " << client_fd << std::endl;
 	
-	char buffer[BUFFER_SIZE]{};
-	
 	uint32_t network_length{};
-	recv(client_fd, &network_length, sizeof(network_length), 0);
+    ssize_t len_size = read_exact(client_fd, &network_length, sizeof(network_length), sizeof(network_length));
+
+	if (len_size != sizeof(network_length)) {
+    	std::cerr << "Failed to read message length." << std::endl;
+    	return 1;
+	}
 	uint32_t message_length = ntohl(network_length);
 
 	std::cout << "\tIncoming message length: " << message_length << std::endl;
 
-	int recv_val = recv(client_fd, buffer, BUFFER_SIZE, 0);
+	char buffer[BUFFER_SIZE]{};
+	ssize_t recv_val = read_exact(client_fd, buffer, BUFFER_SIZE-1, message_length); // last place is reserved for '\0'
+
+	if (recv_val == -1) {
+		std::cerr << "Failed to read message." << std::endl;
+		return 1;
+	} else if (recv_val == 0) {
+		std::cout << "Client disconnected." << std::endl;
+		return 0;
+	} else if (recv_val < message_length) {
+		std::cerr << "Client disconnected before the full message was received." << std::endl;
+		return 1;
+	}
+
 	if (buffer[recv_val-1] == '\n') {
 		buffer[recv_val-1] = 0;
 		recv_val--;
 	}
 	
-	std::cout << "\nData received with size " << recv_val << ": " << buffer << std::endl;
-	
 	std::string msg = "Successfully received the data: ";
 	std::string response = msg + "\"" + buffer +  "\"" + ".\n";
-	send(client_fd, response.data(), response.size(), 0);
+	uint32_t response_length = (uint32_t) htonl(response.size());
+
+	send_all(client_fd, &response_length, sizeof(response_length));
+	send_all(client_fd, response.data(), response.size());
 
 	return 0;
 }
